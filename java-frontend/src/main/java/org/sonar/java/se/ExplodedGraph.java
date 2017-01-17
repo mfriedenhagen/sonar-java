@@ -19,7 +19,10 @@
  */
 package org.sonar.java.se;
 
+import com.google.common.collect.LinkedListMultimap;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+
 import org.sonar.java.cfg.CFG;
 import org.sonar.java.se.constraint.Constraint;
 import org.sonar.java.se.symbolicvalues.BinarySymbolicValue;
@@ -29,10 +32,12 @@ import org.sonar.plugins.java.api.tree.Tree;
 
 import javax.annotation.CheckForNull;
 import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 public class ExplodedGraph {
 
@@ -113,7 +118,7 @@ public class ExplodedGraph {
     public final ProgramPoint programPoint;
     @Nullable
     public final ProgramState programState;
-    private final List<Node> parents;
+    private final LinkedListMultimap<Node, MethodYield> parents;
     private final List<LearnedConstraint> learnedConstraints;
 
     private final List<LearnedValue> learnedSymbols;
@@ -123,10 +128,10 @@ public class ExplodedGraph {
       this.programState = programState;
       learnedConstraints = new ArrayList<>();
       learnedSymbols = new ArrayList<>();
-      parents = new ArrayList<>();
+      parents = LinkedListMultimap.create();
     }
 
-    public void setParent(@Nullable Node parent) {
+    public void setParent(@Nullable Node parent, @Nullable MethodYield methodYield) {
       if (parent != null) {
         if (parents.isEmpty()) {
           programState.constraints.forEach((sv, c) -> {
@@ -140,7 +145,7 @@ public class ExplodedGraph {
             }
           });
         }
-        parents.add(parent);
+        parents.put(parent, methodYield);
       }
     }
 
@@ -154,17 +159,21 @@ public class ExplodedGraph {
       learnedConstraints.add(new LearnedConstraint(sv, constraint));
     }
 
-    public void addParent(Node node) {
-      parents.add(node);
+    public void addParent(Node node, @Nullable MethodYield methodYield) {
+      parents.put(node, methodYield);
     }
 
     @Nullable
     public Node parent() {
-      return parents.isEmpty() ? null : parents.get(0);
+      return parents.isEmpty() ? null : Lists.newArrayList(parents.keySet()).get(0);
     }
 
     public List<Node> getParents() {
-      return parents;
+      return Lists.newArrayList(parents.keySet());
+    }
+
+    public List<MethodYield> usedMethodYields(Node parent) {
+      return parents.get(parent).stream().filter(Objects::nonNull).collect(Collectors.toList());
     }
 
     public List<LearnedConstraint> getLearnedConstraints() {

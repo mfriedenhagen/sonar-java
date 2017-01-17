@@ -21,6 +21,7 @@ package org.sonar.java.se;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+
 import org.apache.commons.lang.builder.EqualsBuilder;
 import org.apache.commons.lang.builder.HashCodeBuilder;
 import org.sonar.java.se.constraint.BooleanConstraint;
@@ -82,7 +83,7 @@ public class MethodYield {
       exceptionType == null ? "" : (" (" + exceptionType + ")"));
   }
 
-  public Stream<ProgramState> statesAfterInvocation(List<SymbolicValue> invocationArguments, List<Type> invocationTypes, ProgramState programState,
+  public Stream<Pair<MethodYield, ProgramState>> statesAfterInvocation(List<SymbolicValue> invocationArguments, List<Type> invocationTypes, ProgramState programState,
     Supplier<SymbolicValue> svSupplier) {
     Set<ProgramState> results = new LinkedHashSet<>();
     for (int index = 0; index < invocationArguments.size(); index++) {
@@ -120,7 +121,7 @@ public class MethodYield {
     if (resultConstraint != null) {
       stateStream = stateStream.map(s -> s.addConstraint(sv, resultConstraint));
     }
-    return stateStream.distinct();
+    return stateStream.distinct().map(ps -> new Pair<>(this, ps));
   }
 
   @CheckForNull

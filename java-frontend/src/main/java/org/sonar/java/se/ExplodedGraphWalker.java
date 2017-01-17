@@ -25,6 +25,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
+
 import org.sonar.api.utils.log.Logger;
 import org.sonar.api.utils.log.Loggers;
 import org.sonar.java.cfg.CFG;
@@ -79,6 +80,7 @@ import org.sonar.plugins.java.api.tree.VariableTree;
 import org.sonar.plugins.java.api.tree.WhileStatementTree;
 
 import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
@@ -601,15 +603,15 @@ public class ExplodedGraphWalker {
           invocationTypes,
           programState,
           () -> thrownExceptionsByExceptionType.computeIfAbsent(yield.exceptionType, constraintManager::createExceptionalSymbolicValue)))
-        .forEach(ps -> enqueueExceptionalPaths(ps.clearStack(), (SymbolicValue.ExceptionalSymbolicValue) ps.peekValue()));
+        .forEach(this::enqueueExceptionalPaths);
 
       // Enqueue happy paths
       methodInvokedBehavior.happyPathYields()
         .flatMap(yield -> yield.statesAfterInvocation(invocationArguments, invocationTypes, programState, () -> resultValue))
-        .map(psYield -> handleSpecialMethods(psYield, mit))
-        .forEach(psYield -> {
+        .map(pairYieldPs -> new Pair<>(pairYieldPs.a, handleSpecialMethods(pairYieldPs.b, mit)))
+        .forEach(pairMethodYieldPs -> {
           checkerDispatcher.syntaxNode = mit;
-          checkerDispatcher.addTransition(psYield);
+          checkerDispatcher.addTransition(pairMethodYieldPs.b);
           clearStack(mit);
         });
     } else {
@@ -647,7 +649,16 @@ public class ExplodedGraphWalker {
     enqueueExceptionalPaths(programState.clearStack(), constraintManager.createExceptionalSymbolicValue(null));
   }
 
+  private void enqueueExceptionalPaths(Pair<MethodYield, ProgramState> pairMethodYieldPs) {
+    ProgramState ps = pairMethodYieldPs.b;
+    enqueueExceptionalPaths(ps.clearStack(), (SymbolicValue.ExceptionalSymbolicValue) ps.peekValue(), pairMethodYieldPs.a);
+  }
+
   private void enqueueExceptionalPaths(ProgramState ps, SymbolicValue.ExceptionalSymbolicValue exceptionSV) {
+    enqueueExceptionalPaths(ps, exceptionSV, null);
+  }
+
+  private void enqueueExceptionalPaths(ProgramState ps, SymbolicValue.ExceptionalSymbolicValue exceptionSV, @Nullable MethodYield methodYield) {
     Set<CFG.Block> exceptionBlocks = node.programPoint.block.exceptions();
     List<CFG.Block> catchBlocks = exceptionBlocks.stream().filter(CFG.Block.IS_CATCH_BLOCK).collect(Collectors.toList());
 
@@ -657,14 +668,14 @@ public class ExplodedGraphWalker {
       .sorted((b1, b2) -> Integer.compare(b2.id(), b1.id()))
       .findFirst();
     if (firstMatchingCatchBlock.isPresent()) {
-      enqueue(new ExplodedGraph.ProgramPoint(firstMatchingCatchBlock.get(), 0), ps);
+      enqueue(new ExplodedGraph.ProgramPoint(firstMatchingCatchBlock.get(), 0), ps, methodYield);
       return;
     }
 
     // branch to any unchecked exception catch
     catchBlocks.stream()
       .filter(ExplodedGraphWalker::isCatchingUncheckedException)
-      .forEach(b -> enqueue(new ExplodedGraph.ProgramPoint(b, 0), ps));
+      .forEach(b -> enqueue(new ExplodedGraph.ProgramPoint(b, 0), ps, methodYield));
 
     // store the exception as exit value in case of method exit in next block
     ProgramState newPs = ps.clearStack().stackValue(exceptionSV);
@@ -673,12 +684,12 @@ public class ExplodedGraphWalker {
     // use other exceptional blocks, i.e. finally block and exit blocks
     exceptionBlocks.stream()
       .filter(CFG.Block.IS_CATCH_BLOCK.negate())
-      .forEach(b -> enqueue(new ExplodedGraph.ProgramPoint(b, 0), newPs, true));
+      .forEach(b -> enqueue(new ExplodedGraph.ProgramPoint(b, 0), newPs, true, methodYield));
 
     // explicitly add the exception if next block is method exit
     node.programPoint.block.successors().stream()
       .filter(CFG.Block::isMethodExitBlock)
-      .forEach(b -> enqueue(new ExplodedGraph.ProgramPoint(b, 0), newPs, true));
+      .forEach(b -> enqueue(new ExplodedGraph.ProgramPoint(b, 0), newPs, true, methodYield));
   }
 
   private static boolean isCaughtByBlock(@Nullable Type thrownType, CFG.Block catchBlock) {
@@ -956,7 +967,15 @@ public class ExplodedGraphWalker {
     enqueue(programPoint, programState, false);
   }
 
+  public void enqueue(ExplodedGraph.ProgramPoint programPoint, ProgramState programState, @Nullable MethodYield methodYield) {
+    enqueue(programPoint, programState, false, methodYield);
+  }
+
   public void enqueue(ExplodedGraph.ProgramPoint newProgramPoint, ProgramState programState, boolean exitPath) {
+    enqueue(newProgramPoint, programState, exitPath, null);
+  }
+
+  public void enqueue(ExplodedGraph.ProgramPoint newProgramPoint, ProgramState programState, boolean exitPath, @Nullable MethodYield methodYield) {
     ExplodedGraph.ProgramPoint programPoint = newProgramPoint;
 
     int nbOfExecution = programState.numberOfTimeVisited(programPoint);
@@ -975,14 +994,14 @@ public class ExplodedGraphWalker {
     ExplodedGraph.Node cachedNode = explodedGraph.getNode(programPoint, ps);
     if (!cachedNode.isNew && exitPath == cachedNode.exitPath) {
       // has been enqueued earlier
-      cachedNode.addParent(node);
+      cachedNode.addParent(node, methodYield);
       return;
     }
     cachedNode.exitPath = exitPath;
     if(node != null) {
       cachedNode.happyPath = node.happyPath;
     }
-    cachedNode.setParent(node);
+    cachedNode.setParent(node, methodYield);
     workList.addFirst(cachedNode);
   }
 
