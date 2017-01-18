@@ -22,15 +22,20 @@ package org.sonar.java.se.checks;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import org.sonar.java.se.ExplodedGraph;
+import org.sonar.java.se.ExplodedGraph.Node;
+import org.sonar.java.se.MethodYield;
 import org.sonar.java.se.constraint.Constraint;
 import org.sonar.java.se.symbolicvalues.BinarySymbolicValue;
 import org.sonar.java.se.symbolicvalues.SymbolicValue;
 import org.sonar.plugins.java.api.JavaFileScannerContext;
 import org.sonar.plugins.java.api.semantic.Symbol;
+import org.sonar.plugins.java.api.semantic.Type;
+import org.sonar.plugins.java.api.tree.MethodInvocationTree;
 import org.sonar.plugins.java.api.tree.Tree;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -117,14 +122,51 @@ public class FlowComputation {
     final ExplodedGraph.Node parent = currentNode.parent();
     learnedConstraints.stream()
       .filter(addToFlow.and(Objects::nonNull))
-      .forEach(lc -> flow.add(location(parent, learnedConstraintMessage(lc, parent))));
+      .forEach(lc -> {
+        flow.add(location(parent, learnedConstraintMessage(lc, currentNode, parent)));
+        if (parent.programPoint.syntaxTree().is(Tree.Kind.METHOD_INVOCATION)) {
+          List<MethodYield> usedMethodYields = currentNode.usedMethodYields(parent);
+          if (!usedMethodYields.isEmpty()) {
+            flow.addAll(flowFromMethodInvocation(usedMethodYields, parent));
+          }
+        }
+      });
+
     return learnedConstraints;
   }
 
-  private static String learnedConstraintMessage(Constraint lc, ExplodedGraph.Node currentNode) {
-    Tree nodeTree = currentNode.programPoint.syntaxTree();
+  private List<JavaFileScannerContext.Location> flowFromMethodInvocation(List<MethodYield> usedMethodYields, ExplodedGraph.Node parentNode) {
+    // TODO use other yields as alternative flow?
+    MethodYield firstMethodYield = usedMethodYields.get(0);
+    int argumentIndex = correspondingArgumentIndex(symbolicValue, parentNode);
+    return firstMethodYield.flow(argumentIndex);
+  }
+
+  private static int correspondingArgumentIndex(SymbolicValue candidate, ExplodedGraph.Node invocationNode) {
+    MethodInvocationTree mit = (MethodInvocationTree) invocationNode.programPoint.syntaxTree();
+    List<SymbolicValue> arguments = argumentsUsedForMethodInvocation(invocationNode, mit);
+    return arguments.indexOf(candidate);
+  }
+
+  private static List<SymbolicValue> argumentsUsedForMethodInvocation(ExplodedGraph.Node invocationNode, MethodInvocationTree mit) {
+    List<SymbolicValue> values = new ArrayList<>(invocationNode.programState.peekValues(mit.arguments().size()));
+    Collections.reverse(values);
+    return values;
+  }
+
+  private static String learnedConstraintMessage(Constraint lc, ExplodedGraph.Node currentNode, ExplodedGraph.Node parent) {
+    Tree nodeTree = parent.programPoint.syntaxTree();
     String name = SyntaxTreeNameFinder.getName(nodeTree);
     if (nodeTree.is(Tree.Kind.METHOD_INVOCATION)) {
+      List<MethodYield> usedMethodYields = currentNode.usedMethodYields(parent);
+      if (!usedMethodYields.isEmpty()) {
+        // TODO use other yields as alternative flows ?
+        Type exceptionType = usedMethodYields.get(0).exceptionType();
+        // Only considering exceptional flows
+        if (exceptionType != null) {
+          return exceptionType.isUnknown() ? String.format("Exception thrown by '%s'", name) : String.format("Exception '%s' thrown by '%s'", exceptionType.name(), name);
+        }
+      }
       return String.format("'%s' returns %s", name, lc.valueAsString());
     }
     if (nodeTree.is(Tree.Kind.NEW_CLASS)) {
