@@ -80,7 +80,7 @@ function loadDot(DOTstring, useProgramStates, displayAsTree) {
           if (nodeId == node.id) {
             programStateAsString = node.programState;
           }
-        })
+        });
 
         // ugly hack to get differents parts of the program state based on its toString() method. 
         // Should be refactored in order to get correctly each object
@@ -93,6 +93,36 @@ function loadDot(DOTstring, useProgramStates, displayAsTree) {
           result += tableLine('stack', groups[3]);
           result += tableLine('lastEvaluatedSymbol', groups[4]);
           result += '</table>';
+        }
+      }
+      return result;
+    }
+
+    network.on("selectEdge", function(params) {
+      document.getElementById('programstate').innerHTML = getYields(params.edges);
+    });
+
+    network.on("deselectEdge", function(params) {
+      document.getElementById('programstate').innerHTML = DEFAULT_PROGRAM_STATE_HTML;
+    });
+
+    function getYields(edgeIds) {
+      var result = DEFAULT_PROGRAM_STATE_HTML;
+      if (edgeIds.length == 1) {
+        var edgeId = edgeIds[0];
+        var yieldsAsString;
+        data.edges.forEach(function(edge) {
+          if (edgeId == edge.id) {
+            yieldsAsString = edge.yields;
+          }
+        });
+
+        if (yieldsAsString) {
+          result = '<h3>Method Yields:</h3>';
+          var yields = yieldsAsString.split('},');
+          yields.forEach(function(methodYield) {
+            result += '<code>' + methodYield + '}</code><br />';
+          });
         }
       }
       return result;
